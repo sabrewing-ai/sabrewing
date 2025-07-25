@@ -205,20 +205,15 @@ function hydrate(vnode: VDOMNode, container: HTMLElement): HydrationResult {
         ) as HTMLElement;
       }
 
-      // If not found by ID, search for any list element
-      if (!el) {
-        const listElements = container.querySelectorAll(
-          '[data-hydrate="list"]'
-        );
-        if (listElements.length > 0) {
-          el = listElements[0] as HTMLElement;
-        }
-      }
-
-      // If still not found, create a new container
+      // Don't fall back to using arbitrary list elements - this causes multiple lists
+      // to hydrate to the same DOM element. Instead, create a new container if the
+      // specific one isn't found.
       if (!el) {
         el = document.createElement("div");
         el.setAttribute("data-hydrate", "list");
+        if (expectedId) {
+          el.setAttribute("data-hydrate-id", expectedId);
+        }
         parent.insertBefore(el, domNode);
       }
 

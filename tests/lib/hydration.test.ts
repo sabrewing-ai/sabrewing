@@ -5,6 +5,8 @@ import { signal } from "../../lib/signal";
 import { hydrate } from "../../lib/hydration";
 import { renderToStream } from "../../lib/renderToStream";
 import console from "console";
+import { JSDOM } from "jsdom";
+import { setHydratingState } from "../../lib/hydration.js";
 
 // Helper function to read stream content
 async function readStream(stream: ReadableStream): Promise<string> {
@@ -1990,5 +1992,164 @@ describe("hydration", () => {
       expect(div!.style.color).toBe("orange");
       result.cleanup();
     });
+  });
+});
+
+describe("Multiple Lists Hydration Bug", () => {
+  beforeEach(() => {
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body><div id="root"></div></body></html>`
+    );
+    global.document = dom.window.document;
+    global.HTMLElement = dom.window.HTMLElement;
+    global.Node = dom.window.Node;
+    (global as any).window = dom.window;
+  });
+
+  it("should not allow multiple lists to hydrate to the same DOM element", () => {
+    // Set up DOM with two separate list containers like in the HTML example
+    const container = document.getElementById("root")!;
+    container.innerHTML = `
+      <nav>
+        <div data-hydrate="list" data-hydrate-id="list_3">
+          <a href="/" data-key="/">Home</a>
+          <a href="/docs" data-key="/docs">Docs</a>
+        </div>
+      </nav>
+      <main>
+        <div data-hydrate="list" data-hydrate-id="list_4">
+          <div data-key="feature1">Feature 1</div>
+          <div data-key="feature2">Feature 2</div>
+        </div>
+      </main>
+    `;
+
+    // Create signals for both lists
+    const navItems = signal([
+      { href: "/", label: "Home" },
+      { href: "/docs", label: "Docs" },
+    ]);
+
+    const features = signal([
+      { id: "feature1", name: "Feature 1" },
+      { id: "feature2", name: "Feature 2" },
+    ]);
+
+    // Create VNodes for both lists
+    const navList = h.list(
+      navItems,
+      (item: any) => item.href,
+      (item: any) =>
+        h("a", { href: item.href, "data-key": item.href }, item.label)
+    );
+
+    const featureList = h.list(
+      features,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+
+    // Get references to the actual DOM elements before hydration
+    const navListElement = container.querySelector(
+      '[data-hydrate-id="list_3"]'
+    ) as HTMLElement;
+    const featureListElement = container.querySelector(
+      '[data-hydrate-id="list_4"]'
+    ) as HTMLElement;
+
+    expect(navListElement).toBeTruthy();
+    expect(featureListElement).toBeTruthy();
+    expect(navListElement).not.toBe(featureListElement);
+
+    // Hydrate the navigation list first
+    const navResult = hydrate(navList, container);
+
+    // Hydrate the features list second
+    const featureResult = hydrate(featureList, container);
+
+    // Verify that each list hydrated to its correct DOM element
+    // The nav list should still be in the nav section
+    const hydratedNavList = container.querySelector(
+      'nav [data-hydrate="list"]'
+    ) as HTMLElement;
+    expect(hydratedNavList).toBeTruthy();
+    expect(hydratedNavList.getAttribute("data-hydrate-id")).toBe("list_3");
+
+    // The feature list should still be in the main section
+    const hydratedFeatureList = container.querySelector(
+      'main [data-hydrate="list"]'
+    ) as HTMLElement;
+    expect(hydratedFeatureList).toBeTruthy();
+    expect(hydratedFeatureList.getAttribute("data-hydrate-id")).toBe("list_4");
+
+    // Most importantly: they should be different elements
+    expect(hydratedNavList).not.toBe(hydratedFeatureList);
+
+    // Verify content is correct for each list
+    expect(hydratedNavList.querySelector('[data-key="/"]')).toBeTruthy();
+    expect(hydratedNavList.querySelector('[data-key="/docs"]')).toBeTruthy();
+
+    expect(
+      hydratedFeatureList.querySelector('[data-key="feature1"]')
+    ).toBeTruthy();
+    expect(
+      hydratedFeatureList.querySelector('[data-key="feature2"]')
+    ).toBeTruthy();
+
+    // Clean up
+    navResult.cleanup?.();
+    featureResult.cleanup?.();
+  });
+
+  it("should handle missing list elements gracefully without affecting other lists", () => {
+    const container = document.getElementById("root")!;
+    container.innerHTML = `
+      <div data-hydrate="list" data-hydrate-id="list_1">
+        <div data-key="item1">Item 1</div>
+      </div>
+    `;
+
+    const items1 = signal([{ id: "item1", name: "Item 1" }]);
+    const items2 = signal([{ id: "item2", name: "Item 2" }]);
+
+    const list1 = h.list(
+      items1,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+
+    // This list has no corresponding DOM element (list_2 doesn't exist)
+    const list2 = h.list(
+      items2,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+
+    const list1Element = container.querySelector(
+      '[data-hydrate-id="list_1"]'
+    ) as HTMLElement;
+    expect(list1Element).toBeTruthy();
+
+    // Hydrate both lists
+    const result1 = hydrate(list1, container);
+    const result2 = hydrate(list2, container);
+
+    // List 2 should either:
+    // 1. Create a new element, OR
+    // 2. Fail gracefully without affecting list 1
+    // But it should NOT hydrate to list_1's element
+
+    const finalList1Element = container.querySelector(
+      '[data-hydrate-id="list_1"]'
+    ) as HTMLElement;
+    expect(finalList1Element).toBeTruthy();
+    expect(finalList1Element.getAttribute("data-hydrate-id")).toBe("list_1");
+
+    // Verify list 1 still has its correct content
+    expect(finalList1Element.querySelector('[data-key="item1"]')).toBeTruthy();
+
+    // Clean up
+    result1.cleanup?.();
+    result2.cleanup?.();
   });
 });
