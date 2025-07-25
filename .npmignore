@@ -1,0 +1,34 @@
+# Source files (not needed in npm package)
+lib/
+tests/
+examples/
+*.test.ts
+*.test.js
+
+# Build artifacts
+dist-client/
+*.log
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation
+README.md
+sabrewing.vite.config.template.ts
+
+# Config files
+vite.config.ts
+vite.server.config.ts
+tsconfig.json
+puppeteer-test.js
+
+# Git
+.git/
+.gitignore
+
+# Dependencies
+node_modules/
+package-lock.json 
