@@ -199,10 +199,20 @@ function hydrate(vnode: VDOMNode, container: HTMLElement): HydrationResult {
       let el: HTMLElement | null = null;
 
       // Search for list element with data-hydrate="list"
+      // First search in the immediate parent (for lists inside signals)
+      // Then search in the root container (for top-level lists)
       if (expectedId) {
-        el = container.querySelector(
+        // Search in parent first (for nested scenarios like lists inside signals)
+        el = parent.querySelector(
           `[data-hydrate="list"][data-hydrate-id="${expectedId}"]`
         ) as HTMLElement;
+
+        // If not found in parent, search in root container
+        if (!el) {
+          el = container.querySelector(
+            `[data-hydrate="list"][data-hydrate-id="${expectedId}"]`
+          ) as HTMLElement;
+        }
       }
 
       // Don't fall back to using arbitrary list elements - this causes multiple lists

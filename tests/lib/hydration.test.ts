@@ -4,9 +4,7 @@ import { h } from "../../lib/h";
 import { signal } from "../../lib/signal";
 import { hydrate } from "../../lib/hydration";
 import { renderToStream } from "../../lib/renderToStream";
-import console from "console";
 import { JSDOM } from "jsdom";
-import { setHydratingState } from "../../lib/hydration.js";
 
 // Helper function to read stream content
 async function readStream(stream: ReadableStream): Promise<string> {
@@ -2151,5 +2149,545 @@ describe("Multiple Lists Hydration Bug", () => {
     // Clean up
     result1.cleanup?.();
     result2.cleanup?.();
+  });
+});
+
+describe("Advanced Multiple Lists Hydration", () => {
+  beforeEach(() => {
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body><div id="root"></div></body></html>`
+    );
+    global.document = dom.window.document;
+    global.HTMLElement = dom.window.HTMLElement;
+    global.Node = dom.window.Node;
+    (global as any).window = dom.window;
+  });
+
+  it("should handle nested lists without interference", () => {
+    const container = document.getElementById("root")!;
+    container.innerHTML = `
+      <div data-hydrate="list" data-hydrate-id="outer_list">
+        <div data-key="category1">
+          <h3>Category 1</h3>
+          <div data-hydrate="list" data-hydrate-id="inner_list_1">
+            <div data-key="item1_1">Item 1.1</div>
+            <div data-key="item1_2">Item 1.2</div>
+          </div>
+        </div>
+        <div data-key="category2">
+          <h3>Category 2</h3>
+          <div data-hydrate="list" data-hydrate-id="inner_list_2">
+            <div data-key="item2_1">Item 2.1</div>
+            <div data-key="item2_2">Item 2.2</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const categories = signal([
+      {
+        id: "category1",
+        name: "Category 1",
+        items: [
+          { id: "item1_1", name: "Item 1.1" },
+          { id: "item1_2", name: "Item 1.2" },
+        ],
+      },
+      {
+        id: "category2",
+        name: "Category 2",
+        items: [
+          { id: "item2_1", name: "Item 2.1" },
+          { id: "item2_2", name: "Item 2.2" },
+        ],
+      },
+    ]);
+
+    const category1Items = signal(categories.value[0].items);
+    const category2Items = signal(categories.value[1].items);
+
+    // Create nested structure with outer list containing inner lists
+    const outerList = h.list(
+      categories,
+      (cat: any) => cat.id,
+      (cat: any) =>
+        h(
+          "div",
+          { "data-key": cat.id },
+          h("h3", {}, cat.name),
+          cat.id === "category1"
+            ? h.list(
+                category1Items,
+                (item: any) => item.id,
+                (item: any) => h("div", { "data-key": item.id }, item.name)
+              )
+            : h.list(
+                category2Items,
+                (item: any) => item.id,
+                (item: any) => h("div", { "data-key": item.id }, item.name)
+              )
+        )
+    );
+
+    const result = hydrate(outerList, container);
+
+    // Verify outer list hydrated correctly
+    const outerListEl = container.querySelector(
+      '[data-hydrate-id="outer_list"]'
+    ) as HTMLElement;
+    expect(outerListEl).toBeTruthy();
+    expect(outerListEl.querySelector('[data-key="category1"]')).toBeTruthy();
+    expect(outerListEl.querySelector('[data-key="category2"]')).toBeTruthy();
+
+    // Verify inner lists hydrated to their own containers
+    const innerList1El = container.querySelector(
+      '[data-hydrate-id="inner_list_1"]'
+    ) as HTMLElement;
+    const innerList2El = container.querySelector(
+      '[data-hydrate-id="inner_list_2"]'
+    ) as HTMLElement;
+
+    expect(innerList1El).toBeTruthy();
+    expect(innerList2El).toBeTruthy();
+    expect(innerList1El).not.toBe(innerList2El);
+    expect(innerList1El).not.toBe(outerListEl);
+    expect(innerList2El).not.toBe(outerListEl);
+
+    // Verify inner list contents
+    expect(innerList1El.querySelector('[data-key="item1_1"]')).toBeTruthy();
+    expect(innerList1El.querySelector('[data-key="item1_2"]')).toBeTruthy();
+    expect(innerList2El.querySelector('[data-key="item2_1"]')).toBeTruthy();
+    expect(innerList2El.querySelector('[data-key="item2_2"]')).toBeTruthy();
+
+    // Cleanup
+    result.cleanup?.();
+  });
+
+  it("should handle conditional lists with missing hydration containers", () => {
+    const container = document.getElementById("root")!;
+    // Only create one container, but we'll try to hydrate two lists
+    container.innerHTML = `
+      <div class="section">
+        <div data-hydrate="list" data-hydrate-id="existing_list">
+          <div data-key="existing1">Existing Item 1</div>
+        </div>
+      </div>
+    `;
+
+    const showList1 = signal(true);
+    const showList2 = signal(true);
+    const items1 = signal([{ id: "existing1", name: "Existing Item 1" }]);
+    const items2 = signal([{ id: "missing1", name: "Missing Item 1" }]);
+
+    // This list has a container in the DOM
+    const conditionalList1 = showList1.value
+      ? h.list(
+          items1,
+          (item: any) => item.id,
+          (item: any) => h("div", { "data-key": item.id }, item.name)
+        )
+      : null;
+
+    // This list does NOT have a container in the DOM
+    const conditionalList2 = showList2.value
+      ? h.list(
+          items2,
+          (item: any) => item.id,
+          (item: any) => h("div", { "data-key": item.id }, item.name)
+        )
+      : null;
+
+    // Hydrate both
+    const result1 = hydrate(conditionalList1!, container);
+    const result2 = hydrate(conditionalList2!, container);
+
+    // First list should use the existing container
+    const existingListEl = container.querySelector(
+      '[data-hydrate-id="existing_list"]'
+    ) as HTMLElement;
+    expect(existingListEl).toBeTruthy();
+    expect(existingListEl.querySelector('[data-key="existing1"]')).toBeTruthy();
+
+    // Second list should create its own container, not steal the first one
+    // The fix should prevent it from taking the existing_list container
+    const allListElements = container.querySelectorAll('[data-hydrate="list"]');
+    expect(allListElements.length).toBeGreaterThan(1); // Should have created a new container
+
+    // Verify the existing list still has correct content
+    expect(existingListEl.getAttribute("data-hydrate-id")).toBe(
+      "existing_list"
+    );
+    expect(existingListEl.querySelector('[data-key="existing1"]')).toBeTruthy();
+
+    // Cleanup
+    result1.cleanup?.();
+    result2.cleanup?.();
+  });
+
+  it("should handle deeply nested DOM with multiple lists at different levels", () => {
+    const container = document.getElementById("root")!;
+    container.innerHTML = `
+      <div class="level1">
+        <div data-hydrate="list" data-hydrate-id="level1_list">
+          <div data-key="l1_item1">Level 1 Item 1</div>
+        </div>
+        <div class="level2">
+          <div data-hydrate="list" data-hydrate-id="level2_list">
+            <div data-key="l2_item1">Level 2 Item 1</div>
+          </div>
+          <div class="level3">
+            <div data-hydrate="list" data-hydrate-id="level3_list">
+              <div data-key="l3_item1">Level 3 Item 1</div>
+            </div>
+            <div class="level4">
+              <div data-hydrate="list" data-hydrate-id="level4_list">
+                <div data-key="l4_item1">Level 4 Item 1</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const level1Items = signal([{ id: "l1_item1", name: "Level 1 Item 1" }]);
+    const level2Items = signal([{ id: "l2_item1", name: "Level 2 Item 1" }]);
+    const level3Items = signal([{ id: "l3_item1", name: "Level 3 Item 1" }]);
+    const level4Items = signal([{ id: "l4_item1", name: "Level 4 Item 1" }]);
+
+    const list1 = h.list(
+      level1Items,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+    const list2 = h.list(
+      level2Items,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+    const list3 = h.list(
+      level3Items,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+    const list4 = h.list(
+      level4Items,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+
+    // Hydrate all lists
+    const result1 = hydrate(list1, container);
+    const result2 = hydrate(list2, container);
+    const result3 = hydrate(list3, container);
+    const result4 = hydrate(list4, container);
+
+    // Verify each list found its correct container
+    const l1El = container.querySelector(
+      '[data-hydrate-id="level1_list"]'
+    ) as HTMLElement;
+    const l2El = container.querySelector(
+      '[data-hydrate-id="level2_list"]'
+    ) as HTMLElement;
+    const l3El = container.querySelector(
+      '[data-hydrate-id="level3_list"]'
+    ) as HTMLElement;
+    const l4El = container.querySelector(
+      '[data-hydrate-id="level4_list"]'
+    ) as HTMLElement;
+
+    expect(l1El).toBeTruthy();
+    expect(l2El).toBeTruthy();
+    expect(l3El).toBeTruthy();
+    expect(l4El).toBeTruthy();
+
+    // All should be different elements
+    const allElements = [l1El, l2El, l3El, l4El];
+    for (let i = 0; i < allElements.length; i++) {
+      for (let j = i + 1; j < allElements.length; j++) {
+        expect(allElements[i]).not.toBe(allElements[j]);
+      }
+    }
+
+    // Verify correct nesting structure is preserved
+    expect(
+      container.querySelector('.level1 [data-hydrate-id="level1_list"]')
+    ).toBeTruthy();
+    expect(
+      container.querySelector('.level2 [data-hydrate-id="level2_list"]')
+    ).toBeTruthy();
+    expect(
+      container.querySelector('.level3 [data-hydrate-id="level3_list"]')
+    ).toBeTruthy();
+    expect(
+      container.querySelector('.level4 [data-hydrate-id="level4_list"]')
+    ).toBeTruthy();
+
+    // Verify content
+    expect(l1El.querySelector('[data-key="l1_item1"]')).toBeTruthy();
+    expect(l2El.querySelector('[data-key="l2_item1"]')).toBeTruthy();
+    expect(l3El.querySelector('[data-key="l3_item1"]')).toBeTruthy();
+    expect(l4El.querySelector('[data-key="l4_item1"]')).toBeTruthy();
+
+    // Cleanup
+    result1.cleanup?.();
+    result2.cleanup?.();
+    result3.cleanup?.();
+    result4.cleanup?.();
+  });
+
+  it("should handle lists without hydration IDs gracefully", () => {
+    const container = document.getElementById("root")!;
+    container.innerHTML = `
+      <div data-hydrate="list">
+        <div data-key="no_id_1">No ID Item 1</div>
+      </div>
+      <div data-hydrate="list">
+        <div data-key="no_id_2">No ID Item 2</div>
+      </div>
+      <div data-hydrate="list" data-hydrate-id="with_id">
+        <div data-key="with_id_1">With ID Item 1</div>
+      </div>
+    `;
+
+    const items1 = signal([{ id: "no_id_1", name: "No ID Item 1" }]);
+    const items2 = signal([{ id: "no_id_2", name: "No ID Item 2" }]);
+    const items3 = signal([{ id: "with_id_1", name: "With ID Item 1" }]);
+
+    const list1 = h.list(
+      items1,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+    const list2 = h.list(
+      items2,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+    const list3 = h.list(
+      items3,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+
+    // Hydrate all lists
+    const result1 = hydrate(list1, container);
+    const result2 = hydrate(list2, container);
+    const result3 = hydrate(list3, container);
+
+    // The list with ID should definitely find its container
+    const withIdEl = container.querySelector(
+      '[data-hydrate-id="with_id"]'
+    ) as HTMLElement;
+    expect(withIdEl).toBeTruthy();
+    expect(withIdEl.querySelector('[data-key="with_id_1"]')).toBeTruthy();
+
+    // The lists without IDs should either:
+    // 1. Use the existing containers without IDs, or
+    // 2. Create new containers
+    // But they should NOT interfere with the list that has an ID
+    expect(withIdEl.getAttribute("data-hydrate-id")).toBe("with_id");
+
+    // There should be at least 3 list containers total
+    const allListElements = container.querySelectorAll('[data-hydrate="list"]');
+    expect(allListElements.length).toBeGreaterThanOrEqual(3);
+
+    // Cleanup
+    result1.cleanup?.();
+    result2.cleanup?.();
+    result3.cleanup?.();
+  });
+
+  it("should handle multiple lists hydrating to their correct containers", () => {
+    const container = document.getElementById("root")!;
+    container.innerHTML = `
+      <div data-hydrate="list" data-hydrate-id="list_1">
+        <div data-key="item1">List 1 Item</div>
+      </div>
+      <div data-hydrate="list" data-hydrate-id="list_2">
+        <div data-key="item2">List 2 Item</div>
+      </div>
+      <div data-hydrate="list" data-hydrate-id="list_3">
+        <div data-key="item3">List 3 Item</div>
+      </div>
+    `;
+
+    const items1 = signal([{ id: "item1", name: "List 1 Item" }]);
+    const items2 = signal([{ id: "item2", name: "List 2 Item" }]);
+    const items3 = signal([{ id: "item3", name: "List 3 Item" }]);
+
+    const list1 = h.list(
+      items1,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+    const list2 = h.list(
+      items2,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+    const list3 = h.list(
+      items3,
+      (item: any) => item.id,
+      (item: any) => h("div", { "data-key": item.id }, item.name)
+    );
+
+    // Hydrate all lists
+    const result1 = hydrate(list1, container);
+    const result2 = hydrate(list2, container);
+    const result3 = hydrate(list3, container);
+
+    // Verify each list hydrated to its correct container
+    const l1El = container.querySelector(
+      '[data-hydrate-id="list_1"]'
+    ) as HTMLElement;
+    const l2El = container.querySelector(
+      '[data-hydrate-id="list_2"]'
+    ) as HTMLElement;
+    const l3El = container.querySelector(
+      '[data-hydrate-id="list_3"]'
+    ) as HTMLElement;
+
+    expect(l1El).toBeTruthy();
+    expect(l2El).toBeTruthy();
+    expect(l3El).toBeTruthy();
+
+    // All should be different elements
+    expect(l1El).not.toBe(l2El);
+    expect(l1El).not.toBe(l3El);
+    expect(l2El).not.toBe(l3El);
+
+    // Verify correct content in each container
+    expect(l1El.querySelector('[data-key="item1"]')).toBeTruthy();
+    expect(l2El.querySelector('[data-key="item2"]')).toBeTruthy();
+    expect(l3El.querySelector('[data-key="item3"]')).toBeTruthy();
+
+    // Verify no cross-contamination between lists
+    expect(l1El.querySelector('[data-key="item2"]')).toBeFalsy();
+    expect(l1El.querySelector('[data-key="item3"]')).toBeFalsy();
+    expect(l2El.querySelector('[data-key="item1"]')).toBeFalsy();
+    expect(l2El.querySelector('[data-key="item3"]')).toBeFalsy();
+    expect(l3El.querySelector('[data-key="item1"]')).toBeFalsy();
+    expect(l3El.querySelector('[data-key="item2"]')).toBeFalsy();
+
+    // Cleanup
+    result1.cleanup?.();
+    result2.cleanup?.();
+    result3.cleanup?.();
+  });
+
+  it("should handle mixed scenarios: lists in signals in lists", () => {
+    const container = document.getElementById("root")!;
+    container.innerHTML = `
+      <div data-hydrate="list" data-hydrate-id="meta_list">
+        <div data-key="section1">
+          <div data-hydrate="signal" data-hydrate-id="section1_signal">
+            <div data-hydrate="list" data-hydrate-id="section1_list">
+              <div data-key="s1_item1">Section 1 Item 1</div>
+            </div>
+          </div>
+        </div>
+        <div data-key="section2">
+          <div data-hydrate="signal" data-hydrate-id="section2_signal">
+            <div data-hydrate="list" data-hydrate-id="section2_list">
+              <div data-key="s2_item1">Section 2 Item 1</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const sections = signal([
+      {
+        id: "section1",
+        visible: true,
+        items: [{ id: "s1_item1", name: "Section 1 Item 1" }],
+      },
+      {
+        id: "section2",
+        visible: true,
+        items: [{ id: "s2_item1", name: "Section 2 Item 1" }],
+      },
+    ]);
+
+    const section1Items = signal(sections.value[0].items);
+    const section2Items = signal(sections.value[1].items);
+    const section1Visible = signal(sections.value[0].visible);
+    const section2Visible = signal(sections.value[1].visible);
+
+    // Create nested structure: list -> signal -> list
+    const metaList = h.list(
+      sections,
+      (section: any) => section.id,
+      (section: any) =>
+        h(
+          "div",
+          { "data-key": section.id },
+          h.signal(
+            section.id === "section1" ? section1Visible : section2Visible,
+            (visible: boolean) =>
+              visible
+                ? h.list(
+                    section.id === "section1" ? section1Items : section2Items,
+                    (item: any) => item.id,
+                    (item: any) => h("div", { "data-key": item.id }, item.name)
+                  )
+                : null
+          )
+        )
+    );
+
+    const result = hydrate(metaList, container);
+
+    // Verify the meta list hydrated correctly
+    const metaListEl = container.querySelector(
+      '[data-hydrate-id="meta_list"]'
+    ) as HTMLElement;
+    expect(metaListEl).toBeTruthy();
+
+    // Verify signals hydrated correctly
+    const section1SignalEl = container.querySelector(
+      '[data-hydrate-id="section1_signal"]'
+    ) as HTMLElement;
+    const section2SignalEl = container.querySelector(
+      '[data-hydrate-id="section2_signal"]'
+    ) as HTMLElement;
+    expect(section1SignalEl).toBeTruthy();
+    expect(section2SignalEl).toBeTruthy();
+    expect(section1SignalEl).not.toBe(section2SignalEl);
+
+    // Verify inner lists hydrated correctly
+    const section1ListEl = container.querySelector(
+      '[data-hydrate-id="section1_list"]'
+    ) as HTMLElement;
+    const section2ListEl = container.querySelector(
+      '[data-hydrate-id="section2_list"]'
+    ) as HTMLElement;
+    expect(section1ListEl).toBeTruthy();
+    expect(section2ListEl).toBeTruthy();
+    expect(section1ListEl).not.toBe(section2ListEl);
+    expect(section1ListEl).not.toBe(metaListEl);
+    expect(section2ListEl).not.toBe(metaListEl);
+
+    // Verify content
+    expect(section1ListEl.querySelector('[data-key="s1_item1"]')).toBeTruthy();
+    expect(section2ListEl.querySelector('[data-key="s2_item1"]')).toBeTruthy();
+
+    // Test reactivity - hide and show sections
+    section1Visible.value = false;
+    section2Visible.value = false;
+
+    section1Visible.value = true;
+    section2Visible.value = true;
+
+    // Verify structure is maintained after signal changes
+    expect(
+      container.querySelector('[data-hydrate-id="section1_list"]')
+    ).toBeTruthy();
+    expect(
+      container.querySelector('[data-hydrate-id="section2_list"]')
+    ).toBeTruthy();
+
+    // Cleanup
+    result.cleanup?.();
   });
 });
